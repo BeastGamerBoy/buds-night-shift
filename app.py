@@ -1,21 +1,59 @@
-"""BUDS Round 2.5 - Night Shift | Bengaluru Analytics & Operations Console (v2)
-Run: pip install -r requirements.txt  then  streamlit run app.py"""
-import re, warnings, numpy as np, pandas as pd, streamlit as st
+"""BUDS Round 2.5 - Night Shift | Bengaluru Operations Decision-Support Console (v3)
+Run:  pip install -r requirements.txt   then   streamlit run app.py
+Works on ANY CSV / Excel dataset; understands the Team-17 operations workbooks out of the box."""
+import io, os, re, glob, warnings, numpy as np, pandas as pd, streamlit as st
 import plotly.graph_objects as go
 warnings.filterwarnings("ignore")
 
 # ============ THEME ============
-BG, CARD, BORDER, CYAN, OK, WARN, BAD = "#0B0F17", "#151D2A", "#1E293B", "#06B6D4", "#10B981", "#F59E0B", "#F43F5E"
-st.set_page_config("BUDS Night Shift", layout="wide")
-st.markdown(f"""<style>.stApp{{background:{BG};color:#E2E8F0}} section[data-testid=stSidebar]{{background:{CARD}}}
-.card{{background:{CARD};border:1px solid {BORDER};border-radius:8px;padding:12px 14px}}
-.card h4{{margin:0;font-size:11px;color:#94A3B8;text-transform:uppercase}} .card p{{margin:4px 0 0;font-size:24px;font-weight:600}}
-.stTabs [aria-selected=true]{{color:{CYAN}!important}} h1,h2,h3{{color:#F1F5F9}}</style>""", unsafe_allow_html=True)
-card = lambda t, v, c="#F1F5F9", f="": f'<div class="card"><h4>{t} {f}</h4><p style="color:{c}">{v}</p></div>'
+BG, CARD, CARD2, BORDER = "#070B14", "#0F1624", "#141D2F", "#1F2A40"
+CYAN, VIOLET, OK, WARN, BAD, MUTED = "#22D3EE", "#8B5CF6", "#34D399", "#FBBF24", "#FB7185", "#94A3B8"
+st.set_page_config(page_title="BUDS Night Shift · Decision Console", page_icon="🌙", layout="wide", initial_sidebar_state="expanded")
+CSS = f"""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html,body,[class*="css"],.stApp{{font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif}}
+.stApp{{background:radial-gradient(1200px 500px at 85% -10%,#16254a55,transparent),radial-gradient(900px 400px at -10% 0%,#0e3a4a44,transparent),{BG};color:#E2E8F0}}
+#MainMenu,footer{{visibility:hidden}} header[data-testid=stHeader]{{background:transparent}}
+.block-container{{padding-top:1.2rem;max-width:1500px}}
+section[data-testid=stSidebar]{{background:linear-gradient(180deg,{CARD},{BG});border-right:1px solid {BORDER}}}
+.hero{{position:relative;overflow:hidden;border:1px solid {BORDER};border-radius:18px;padding:22px 28px;margin-bottom:14px;
+ background:linear-gradient(120deg,#0b1f33 0%,#14213f 45%,#2a1b4d 100%)}}
+.hero:after{{content:"";position:absolute;right:-60px;top:-60px;width:260px;height:260px;border-radius:50%;background:radial-gradient(circle,{CYAN}55,transparent 70%)}}
+.hero h1{{margin:0;font-size:30px;font-weight:800;letter-spacing:-.5px;background:linear-gradient(90deg,#fff,{CYAN} 70%,{VIOLET});-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+.hero p{{margin:4px 0 12px;color:#B6C3DA;font-size:14px}}
+.pill{{display:inline-block;margin:0 6px 4px 0;padding:3px 11px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid {BORDER};background:#0b1322cc;color:#CBD5E1}}
+.pill.ok{{color:{OK};border-color:{OK}55}} .pill.warn{{color:{WARN};border-color:{WARN}55}} .pill.bad{{color:{BAD};border-color:{BAD}55}} .pill.cy{{color:{CYAN};border-color:{CYAN}55}}
+.kpi{{position:relative;background:linear-gradient(160deg,{CARD2},{CARD});border:1px solid {BORDER};border-radius:14px;padding:14px 16px 12px;height:100%;transition:transform .15s,border-color .15s}}
+.kpi:hover{{transform:translateY(-2px);border-color:var(--ac)}}
+.kpi:before{{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--ac)}}
+.kpi h4{{margin:0;min-height:30px;font-size:11px;letter-spacing:.08em;color:{MUTED};text-transform:uppercase;font-weight:600}}
+.kpi .v{{margin:4px 0 2px;white-space:nowrap;font-size:24px;font-weight:700;color:#F8FAFC;line-height:1.1}} .kpi .s{{font-size:12px;color:{MUTED}}}
+.kpi .tag{{float:right;font-size:10px;padding:1px 7px;border-radius:999px;background:{WARN}22;color:{WARN};font-weight:600}}
+.insight{{border:1px solid {BORDER};border-left:3px solid var(--ac);background:{CARD};border-radius:10px;padding:10px 14px;margin:6px 0;font-size:14px}}
+.sec{{display:flex;align-items:center;gap:10px;margin:18px 0 6px;font-size:18px;font-weight:700;color:#F1F5F9}}
+.sec:after{{content:"";flex:1;height:1px;background:linear-gradient(90deg,{BORDER},transparent)}}
+.stTabs [data-baseweb=tab-list]{{gap:6px;border-bottom:1px solid {BORDER}}}
+.stTabs [data-baseweb=tab]{{border-radius:10px 10px 0 0;padding:8px 14px;color:{MUTED};font-weight:600}}
+.stTabs [aria-selected=true]{{color:{CYAN}!important;background:{CARD}}}
+div[data-testid=stMetricValue]{{font-size:1.55rem}} div[data-testid=stMetricLabel] p{{font-size:12px;white-space:nowrap}}
+div[data-testid=stMetric]{{background:{CARD};border:1px solid {BORDER};border-radius:12px;padding:10px 14px}}
+.stButton>button,.stDownloadButton>button{{border-radius:10px;font-weight:600;border:1px solid {BORDER}}}
+.stButton>button[kind=primary]{{background:linear-gradient(90deg,#0891b2,{VIOLET});border:0;color:#fff}}
+</style>"""
+st.markdown(CSS, unsafe_allow_html=True)
+
+def kpi(title, value, accent=CYAN, sub="", tag=""):
+    t = f'<span class="tag">{tag}</span>' if tag else ""
+    return f'<div class="kpi" style="--ac:{accent}"><h4>{title}{t}</h4><div class="v">{value}</div><div class="s">{sub}&nbsp;</div></div>'
+def section(txt): st.markdown(f'<div class="sec">{txt}</div>', unsafe_allow_html=True)
+def insight(txt, ac=CYAN): st.markdown(f'<div class="insight" style="--ac:{ac}">{txt}</div>', unsafe_allow_html=True)
 inr = lambda v: f"₹{v:,.0f}"
-def style(fig, h=320):
-    fig.update_layout(template="plotly_dark", paper_bgcolor=CARD, plot_bgcolor=CARD, height=h, margin=dict(l=10, r=10, t=40, b=10), colorway=[CYAN, OK, WARN, BAD])
+def style(fig, h=330):
+    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=h, margin=dict(l=10, r=10, t=44, b=10),
+                      colorway=[CYAN, VIOLET, OK, WARN, BAD], font=dict(family="Inter, sans-serif", size=12), title_font=dict(size=15), legend=dict(orientation="h", y=1.12))
+    fig.update_xaxes(gridcolor="#1b2740", zeroline=False); fig.update_yaxes(gridcolor="#1b2740", zeroline=False)
     return fig
+def show(fig, h=330): st.plotly_chart(style(fig, h), width="stretch")
 
 # ============ DEMO DATA ============
 def demo_data():
@@ -110,6 +148,20 @@ def clean(raw):
             if pd.api.types.is_datetime64_any_dtype(df[c]): continue
             p = pd.to_datetime(df[c], errors="coerce").fillna(pd.to_datetime(df[c], errors="coerce", dayfirst=True)); bad = (p.isna() & df[c].notna()).sum(); df[c] = p
             if bad: L(name, "Invalid date -> blank", f"{c}: unreadable dates nulled", bad)
+        for c in [x for x in df.columns if not pd.api.types.is_numeric_dtype(df[x]) and not pd.api.types.is_datetime64_any_dtype(df[x]) and 1 < df[x].nunique() <= 60 and not re.search(DATERX + r"|(id|key|code|sku)$", x, re.I)]:      # 'ICU' / 'icu ' / 'Icu' -> one spelling
+            k = df[c].astype(str).str.strip().str.lower(); k = k.where(df[c].notna())
+            if k.nunique() < df[c].nunique():
+                canon = df.assign(_k=k).dropna(subset=["_k"]).groupby("_k")[c].agg(lambda z: z.value_counts().index[0]); new = k.map(canon).where(df[c].notna(), df[c]); ch = ((new != df[c]) & df[c].notna()).sum()
+                df[c] = new
+                if ch: L(name, "Category spelling unified", f"{c}: case/space variants merged into the most common spelling", ch)
+        for nc in [x for x in df.columns if re.search(r"_name$", x, re.I) and not pd.api.types.is_numeric_dtype(df[x])]:      # X_Name <-> X_ID restoration (only when mapping is strictly one-to-one)
+            ic = re.sub(r"_name$", "_ID", nc, flags=re.I)
+            if ic not in df.columns: continue
+            for tgt, src_ in ((nc, ic), (ic, nc)):
+                pair = df.dropna(subset=[tgt, src_])
+                if pair.empty or pair.groupby(src_)[tgt].nunique().max() > 1 or pair.groupby(tgt)[src_].nunique().max() > 1: continue
+                ref = pair.groupby(src_)[tgt].agg(lambda z: z.mode().iat[0]); f_ = df[tgt].isna() & df[src_].map(ref).notna()
+                if f_.sum(): df.loc[f_, tgt] = df.loc[f_, src_].map(ref); L(name, "Missing value restored", f"{tgt} filled from {src_} (one-to-one mapping)", f_.sum())
         for c in df.columns:
             m = df[c].isna().sum()
             if not m or pd.api.types.is_datetime64_any_dtype(df[c]): continue
@@ -262,26 +314,145 @@ def recommend(b, c, m):
     if b["surrogate"]: r.append("⚠ Some KPIs use surrogates (see banner) - confirm with real data before acting.")
     return r
 
-# ============ ASK YOUR DATA (no API needed) ============
+# ============ ASK YOUR DATA (works offline; optional Claude for richer answers) ============
 def ask(q, c):
-    toks = {w[:5] for w in re.findall(r"[a-z]+", q.lower()) if len(w) > 2}; ql = q.lower()
+    ql = q.lower(); toks = {w[:5] for w in re.findall(r"[a-z]+", ql) if len(w) > 2}
     ov = lambda x: sum(t[:5] in toks for t in re.split(r"[_\W]+", x.lower()) if len(t) > 2)
     best = max(c, key=lambda s_: sum(ov(x) for x in c[s_].columns) + 2 * ov(s_)); df = c[best]
-    num = sorted([x for x in df.columns if pd.api.types.is_numeric_dtype(df[x]) and ov(x)], key=ov, reverse=True)
-    cat = sorted([x for x in df.columns if not pd.api.types.is_numeric_dtype(df[x]) and not pd.api.types.is_datetime64_any_dtype(df[x]) and ov(x) and not re.search(r"(id|key)$", x, re.I)], key=ov, reverse=True)
-    if "hub" in ql and not cat: cat = [x for x in df.columns if re.search(HUBRX, x, re.I)][:1]
-    agg = "mean" if re.search(r"averag|mean|typical", ql) else "count" if re.search(r"how many|count|number of", ql) else "sum"
-    asc = bool(re.search(r"lowest|least|minimum|worst|smallest", ql))
-    if num and cat: t = df.groupby(cat[0])[num[0]].agg(agg).sort_values(ascending=asc).reset_index(); code = f"{best}.groupby('{cat[0]}')['{num[0]}'].{agg}()"
-    elif cat: t = df[cat[0]].value_counts().reset_index(); t.columns = [cat[0], "count"]; code = f"{best}['{cat[0]}'].value_counts()"
-    elif num: t = df[num[0]].agg(["sum", "mean", "min", "max"]).to_frame().T; code = f"{best}['{num[0]}'].agg(sum/mean/min/max)"
-    else: return None, f"Couldn't match your words to a column in '{best}'. Try using column names, e.g. 'total revenue by hub'.", None
-    top = t.iloc[0]; return t, f"From sheet **{best}**: top result is **{top.iloc[0]}** ({top.iloc[1]:,.2f})." if len(t) > 1 and not isinstance(top.iloc[0], (int, float)) or len(t) > 1 else f"From sheet **{best}**.", code
+    isnum = lambda x: pd.api.types.is_numeric_dtype(df[x]); isdt = lambda x: pd.api.types.is_datetime64_any_dtype(df[x])
+    # value filters: any category value spelled out in the question (e.g. 'H02', 'Delivered') becomes a filter
+    qn = " " + re.sub(r"[^a-z0-9]+", " ", ql) + " "; flt = {}
+    for col in df.columns:
+        if isnum(col) or isdt(col) or df[col].nunique() > 60: continue
+        for v in df[col].dropna().unique():
+            vn = re.sub(r"[^a-z0-9]+", " ", str(v).lower()).strip()
+            if len(vn) >= 2 and f" {vn} " in qn and vn not in {"yes", "no", "unknown", "all"}: flt.setdefault(col, []).append(v)
+    num = sorted([x for x in df.columns if isnum(x) and ov(x)], key=ov, reverse=True)
+    cat = sorted([x for x in df.columns if not isnum(x) and not isdt(x) and ov(x) and not re.search(r"(id|key)$", x, re.I)], key=ov, reverse=True)
+    if re.search(r"\bhub", ql) and not cat: cat = [x for x in df.columns if re.search(HUBRX, x, re.I) and not isnum(x)][:1]
+    by = re.search(r"\b(?:by|per|each|across)\b", ql)
+    if flt and not by: cat = [x for x in cat if x not in flt]          # 'revenue in H02' filters; it does not group by hub
+    sub = df
+    for col, vals in flt.items(): sub = sub[sub[col].isin(vals)]
+    agg = "mean" if re.search(r"averag|mean|typical", ql) else "median" if "median" in ql else "count" if re.search(r"how many|count|number of", ql) else "max" if re.search(r"\bmax|largest|biggest", ql) else "min" if re.search(r"\bmin(?!ute)|smallest", ql) else "sum"
+    asc = bool(re.search(r"lowest|least|worst|smallest|bottom", ql)); n = re.search(r"(?:top|bottom|first)\s+(\d+)", ql); n = int(n.group(1)) if n else None
+    fdesc = "; ".join(f"{k} = {', '.join(map(str, v))}" for k, v in flt.items())
+    base_code = f"{best}[" + " & ".join(f"{best}['{k}'].isin({v})" for k, v in flt.items()) + "]" if flt else best
+    if agg == "count" and cat: t = sub[cat[0]].value_counts(ascending=asc).reset_index(); t.columns = [cat[0], "count"]; code = f"{base_code}['{cat[0]}'].value_counts()"
+    elif num and cat: t = sub.groupby(cat[0])[num[0]].agg(agg).sort_values(ascending=asc).reset_index(); code = f"{base_code}.groupby('{cat[0]}')['{num[0]}'].{agg}()"
+    elif cat: t = sub[cat[0]].value_counts(ascending=asc).reset_index(); t.columns = [cat[0], "count"]; code = f"{base_code}['{cat[0]}'].value_counts()"
+    elif num: t = sub[num[0]].agg(["sum", "mean", "median", "min", "max", "count"]).to_frame().T; code = f"{base_code}['{num[0]}'].agg(sum/mean/median/min/max/count)"
+    elif flt: t = pd.DataFrame({"filter": [fdesc], "rows": [len(sub)]}); code = f"len({base_code})"
+    else: return None, f"Couldn't match your words to a column in **{best}**. Try column names, e.g. *total revenue by hub* or *how many orders by status*.", None
+    if n: t = t.head(n)
+    msg = f"Answered from sheet **{best}** ({len(sub):,} rows" + (f" after filter: {fdesc}" if flt else "") + ")."
+    if len(t) > 1 and t.shape[1] > 1 and not pd.api.types.is_numeric_dtype(t.iloc[:, 0]): msg += f" {'Lowest' if asc else 'Highest'}: **{t.iloc[0, 0]}** ({t.iloc[0, 1]:,.0f})." if float(t.iloc[0, 1]).is_integer() else f" {'Lowest' if asc else 'Highest'}: **{t.iloc[0, 0]}** ({t.iloc[0, 1]:,.2f})."
+    return t, msg, code
 
 def llm(q, ctx, key):
     import anthropic
     r = anthropic.Anthropic(api_key=key).messages.create(model="claude-sonnet-4-6", max_tokens=800, messages=[{"role": "user", "content": f"You are an operations analyst. Answer only from this data context, cite numbers, state limits.\n\n{ctx}\n\nQuestion: {q}"}])
     return r.content[0].text
+
+# ============ EXTRA ANALYTICS (v3) ============
+def health(raw, log):
+    """Data Health Score = mean(Completeness, Uniqueness, Validity), each 0-100, measured on the RAW upload."""
+    cells = sum(d.size for d in raw.values()); miss = sum(int(d.isna().sum().sum()) for d in raw.values()); rows = sum(len(d) for d in raw.values())
+    dup = sum(int(d.duplicated().sum()) for d in raw.values()); inval = sum(x["Rows affected"] for x in log if re.search(r"invalid|conflict|standardis|normalis|restored", x["Transformation"], re.I))
+    comp, uniq, val = 100 * (1 - miss / max(cells, 1)), 100 * (1 - dup / max(rows, 1)), 100 * (1 - min(1, inval / max(rows, 1)))
+    return dict(score=(comp + uniq + val) / 3, completeness=comp, uniqueness=uniq, validity=val, missing=miss, dups=dup, fixed=inval, cells=cells, rows=rows)
+
+def sheet_health(raw, cleaned):
+    return pd.DataFrame([{"Sheet": s, "Rows (raw)": len(d), "Columns": d.shape[1], "Missing cells %": round(100 * d.isna().sum().sum() / max(d.size, 1), 1), "Exact duplicate rows": int(d.duplicated().sum()),
+                          "Rows (cleaned)": len(cleaned[s]) if s in cleaned else None} for s, d in raw.items()])
+
+def daily_trend(c, m):
+    om = m.get("order_date")
+    if not om or om[0] not in c or om[1] not in c[om[0]] or not pd.api.types.is_datetime64_any_dtype(c[om[0]][om[1]]): return None
+    df = c[om[0]]; g = df.assign(_d=df[om[1]].dt.normalize()).dropna(subset=["_d"])
+    if g._d.nunique() < 3: return None
+    out = g.groupby("_d").size().rename("Orders").to_frame(); x = otd_frame(c, m)
+    if x is not None and m.get("promised_min") and m["promised_min"][0] == om[0]:
+        d2 = df.loc[x.index, om[1]].dt.normalize(); out["OTD %"] = (x.ok.groupby(d2).mean() * 100)
+    return out
+
+def status_mix(c, m):
+    s = m.get("status")
+    return c[s[0]][s[1]].value_counts() if s and s[0] in c and s[1] in c[s[0]] else None
+
+def sensitivity(b):
+    s0 = simulate(b, NEUTRAL); rows = []
+    for k, v in {"Demand +20%": dict(demand=20), "Fuel / fleet cost ×1.2": dict(fuel=1.2), "Drivers −20%": dict(drivers=80), "Warehouse delay +30 min": dict(delay=30)}.items():
+        p = dict(NEUTRAL); p.update(v); r = simulate(b, p); rows.append({"Shock": k, "Δ Deficit (₹)": r["Deficit (cost-rev)"] - s0["Deficit (cost-rev)"], "Δ Delay risk (pts)": r["Delay Risk %"] - s0["Delay Risk %"]})
+    return pd.DataFrame(rows)
+
+def combine(stack):
+    p = dict(NEUTRAL); drop = set()
+    for s in stack:
+        p["demand"] += s["p"]["demand"]; p["fuel"] *= s["p"]["fuel"]; p["drivers"] = p["drivers"] * s["p"]["drivers"] / 100; p["delay"] += s["p"]["delay"]; drop |= set(s["drop"])
+    p["drivers"] = max(5, p["drivers"]); return p, tuple(drop)
+
+def severity(before, after, levers_moved=True):
+    """Severity reflects the CHANGE a card causes (not the already-weak baseline)."""
+    if not levers_moved: return ("INFO · data / rule card", CYAN)
+    d = (after["Deficit (cost-rev)"] - before["Deficit (cost-rev)"]) / max(abs(before["Deficit (cost-rev)"]), 1) * 100
+    s = max(0, after["Delay Risk %"] - before["Delay Risk %"]) + max(0, d) * .3 + max(0, after["Fleet Load %"] - 100) * .5
+    return ("HIGH", BAD) if s >= 20 else ("MEDIUM", WARN) if s >= 5 else ("LOW", OK)
+
+def card_title(t):
+    t = t.strip(); mm = re.search(r"C\d{2}\s*[—–-]\s*[^\n]+", t)
+    return mm.group(0).strip() if mm else (t.splitlines()[0] if t else "Card")[:90]
+
+def build_xlsx(base, sim0, recs, log, cleaned, history, conflicts, hs):
+    bio = io.BytesIO(); lab = {"otd": "On-time delivery %", "util": "Fleet utilisation %", "ret": "Return rate %", "hold": "Holding cost / month (INR)", "sup": "Supplier score", "rev": "Revenue (INR)", "fleet_cost": "Fleet cost (INR)", "fixed": "Hub fixed cost (INR)", "inv_acc": "Inventory accuracy %", "fleet_avail": "Fleet availability %", "sup_ok": "Suppliers approved %", "n_orders": "Orders analysed"}
+    with pd.ExcelWriter(bio, engine="openpyxl") as w:
+        pd.DataFrame([{"KPI": lab[k], "Value": (round(float(base[k]), 2) if base.get(k) is not None else None), "Surrogate?": "yes" if any(s_.lower()[:3] == k[:3] for s_ in base["surrogate"]) else ""} for k in lab]).to_excel(w, sheet_name="KPIs", index=False)
+        pd.DataFrame({"Recommendation": [re.sub(r"\*\*", "", r) for r in recs]}).to_excel(w, sheet_name="Recommendations", index=False)
+        pd.DataFrame([{"Health score": round(hs["score"], 1), "Completeness": round(hs["completeness"], 1), "Uniqueness": round(hs["uniqueness"], 1), "Validity": round(hs["validity"], 1)}]).to_excel(w, sheet_name="Data_Health", index=False)
+        pd.DataFrame(log).to_excel(w, sheet_name="Audit_Log", index=False)
+        if len(conflicts): conflicts.to_excel(w, sheet_name="Rule_Conflicts", index=False)
+        if history: pd.DataFrame(history).to_excel(w, sheet_name="Scenario_History", index=False)
+        for s_, d in cleaned.items(): d.to_excel(w, sheet_name=f"Clean_{s_}"[:31], index=False)
+    return bio.getvalue()
+
+# ============ GENERIC MODE (any dataset, no operations vocabulary needed) ============
+def _main_sheet(c): return max(c, key=lambda k: len(c[k]) * c[k].shape[1])
+def _nums(d): return [x for x in d.columns if pd.api.types.is_numeric_dtype(d[x]) and d[x].nunique() > 10 and not re.search(r"(id|key|index|code)$", x, re.I)]
+def _cats(d): return [x for x in d.columns if not pd.api.types.is_numeric_dtype(d[x]) and not pd.api.types.is_datetime64_any_dtype(d[x]) and 2 <= d[x].nunique() <= 15 and not re.search(r"(id|key)$", x, re.I)]
+def generic_kpis(c):
+    d = c[_main_sheet(c)]; out = [("Rows", f"{len(d):,}", f"{len(c)} sheet(s)"), ("Columns", f"{d.shape[1]}", "in main sheet"), ("Completeness", f"{100 * (1 - d.isna().mean().mean()):.1f}%", "non-empty cells")]
+    for x in _nums(d)[:3]: out.append((f"Total {x}"[:26], f"{d[x].sum():,.0f}", f"mean {d[x].mean():,.1f} · median {d[x].median():,.1f}"))
+    return out
+def generic_recs(c):
+    d = c[_main_sheet(c)]; nums, cats, r = _nums(d), _cats(d), []; best = None
+    for cat in cats:
+        for num in nums[:4]:
+            g = d.groupby(cat)[num].mean().dropna()
+            if len(g) > 1 and d[num].mean():
+                sp = (g.max() - g.min()) / abs(d[num].mean())
+                if best is None or sp > best[0]: best = (sp, cat, num, g)
+    if best:
+        sp, cat, num, g = best; ov = d[num].mean()
+        r.append(f"**Biggest performance gap: {cat}.** Average {num} is highest for **{g.idxmax()}** ({g.max():,.1f}, {100 * (g.max() / ov - 1):+.0f}% vs overall) and lowest for **{g.idxmin()}** ({g.min():,.1f}, {100 * (g.min() / ov - 1):+.0f}%). Investigate what drives the difference before reallocating resources (association, not proof of cause).")
+    dts = [x for x in d.columns if pd.api.types.is_datetime64_any_dtype(d[x]) and d[x].notna().sum() > 20]
+    if dts and nums:
+        t = d.dropna(subset=[dts[0]]).sort_values(dts[0]); half = len(t) // 2; a_, b_ = t[nums[0]].iloc[:half].mean(), t[nums[0]].iloc[half:].mean()
+        if a_: r.append(f"**Trend in {nums[0]}:** second half of the period averages {b_:,.1f} vs {a_:,.1f} in the first half ({100 * (b_ / a_ - 1):+.1f}%).")
+    bad = [f"{k} ({v:.0%})" for k, v in d.isna().mean().items() if v > .1]
+    if bad: r.append(f"**Data completeness risk:** {', '.join(bad[:4])} have more than 10% missing values - fix capture at source before relying on these fields.")
+    for k in nums[:6]:
+        o = int((((d[k] - d[k].mean()) / (d[k].std() or 1)).abs() > 3).sum())
+        if o: r.append(f"**{k}** has {o} extreme outlier(s) (>3σ) - confirm whether they are entry errors or genuine spikes."); break
+    return r or ["Not enough structure detected for automatic recommendations - use Ask Your Data or Auto Insights."]
+
+# ============ CACHED PIPELINE (re-runs only when files change) ============
+class _Up(io.BytesIO):
+    def __init__(s, name, data): super().__init__(data); s.name = name
+@st.cache_data(show_spinner="Reading & cleaning data…")
+def pipeline(blobs):
+    raw = load_files([_Up(n, b) for n, b in blobs]) if blobs else demo_data(); cl, lg = clean(raw); return raw, cl, lg
+@st.cache_data(show_spinner=False)
+def read_docs(blobs): return {n: read_doc(_Up(n, b)) for n, b in blobs}
 
 # ============ AUTO INSIGHTS (any dataset, no column names needed) ============
 def insights(c):
@@ -305,11 +476,12 @@ def insights(c):
 DEMO_DOCS = {"SOP_Operations.txt": "1. Driver Shift Policy\nDrivers shall not exceed 9 hours per shift. Standard Operating Procedure.\n2. Route Speed\nVehicles must not exceed 40 km/h in zone A routes. Standard Operating Procedure.",
              "Executive_Override.txt": "1. Night Shift Directive\nExecutive Override: drivers may extend to 11 hours per shift during hub outages.\n2. Route Speed\nExecutive Override: speed limit in zone A is 30 km/h during monsoon.",
              "Provisional_Notes.txt": "1. Draft Speed Note\nProvisional note: zone A speed limit may rise to 50 km/h. Not yet approved."}
-TIERS = [("Executive", 4, r"executive|override|directive|ceo|constraint"), ("Unverified", 1, r"unverified"), ("Provisional", 2, r"provisional|draft"), ("SOP", 3, r"standard operating|sop|policy|confirmed")]
+TIERS = [("Executive", 4, r"executive|override|directive|ceo|constraint"), ("Unverified", 1, r"\bunverified|not approved|unapproved|rejected|blocked|suspended"), ("Provisional", 2, r"provisional|draft|conditional|pending"), ("SOP", 3, r"standard operating|sop|policy|confirmed|approved")]
 TOPICS = {"speed": r"speed|km/h", "shift": r"shift|hours", "return": r"return|refund", "hub": r"hub|outage", "route": r"route|vehicle|restrict", "ontime": r"on-?time|sla|promis", "supplier": r"supplier|approv|lead time"}
 def ref_docs(c):
-    """Reference sheets (routes, service rules) become policy passages; 'Confirmed' > 'Provisional' > 'Unverified'."""
-    return {f"{s_}.sheet": "\n".join(" | ".join(f"{k}: {v}" for k, v in zip(df.columns, r) if v) for r in df.fillna("").astype(str).itertuples(index=False)) for s_, df in c.items() if re.search(r"route|_ref|reference", s_, re.I)}
+    """Reference sheets (routes, service rules, supplier rules) become policy passages; status columns drive the tier."""
+    ok = lambda v: v not in ("", "UNKNOWN", "nan", "NaT")
+    return {f"{s_}.sheet": "\n".join(" | ".join(f"{k}: {v}" for k, v in zip(df.columns, r) if ok(v)) for r in df.fillna("").astype(str).itertuples(index=False)) for s_, df in c.items() if re.search(r"route|_ref|reference|suppl", s_, re.I)}
 def read_doc(f):
     n = f.name.lower()
     if n.endswith(".pdf"):
@@ -320,21 +492,39 @@ def read_doc(f):
         return re.sub(r"<[^>]+>", "", re.sub(r"</w:p>|<w:br/>", "\n", x))
     return f.read().decode("utf-8", "ignore")
 def parse_docs(docs):
-    secs, title = [], "Preamble"
+    """Text docs: tier from file name / line keywords. Reference SHEETS: tier comes only from the row's status field
+    (Confirmed/Approved = SOP, Provisional/Conditional = Provisional, Unverified/Not approved = Unverified) - never from free-text notes."""
+    secs, title = [], "Preamble"; tierof = lambda txt, d: next(((n, w) for n, w, rx in TIERS if re.search(rx, txt, re.I)), d)
     for dn, txt in docs.items():
-        tier = next(((n, w) for n, w, rx in TIERS if re.search(rx, dn, re.I)), ("SOP", 2))
+        is_sheet = dn.endswith(".sheet"); tier = ("SOP", 3) if is_sheet else tierof(dn, ("SOP", 2))
         for ln in txt.splitlines():
-            if re.match(r"^(\d+[.)]|#+|section)\s*\S", ln, re.I) and len(ln) < 70: title = ln.strip(); continue
-            if ln.strip(): t2 = next(((n, w) for n, w, rx in TIERS if re.search(rx, ln, re.I)), tier); secs.append(dict(doc=dn, section=title, text=ln.strip(), tier=t2[0], w=t2[1]))
+            if not is_sheet and re.match(r"^(\d+[.)]|#+|section)\s*\S", ln, re.I) and len(ln) < 70: title = ln.strip(); continue
+            if not ln.strip(): continue
+            if is_sheet: st_ = re.search(r"status[^:|]*:\s*([^|]+)", ln, re.I); t2 = tierof(st_.group(1), tier) if st_ else tier; title = ln.split("|")[0].strip()
+            else: t2 = tierof(ln, tier)
+            secs.append(dict(doc=dn, section=title, text=ln.strip(), tier=t2[0], w=t2[1]))
     return pd.DataFrame(secs, columns=["doc", "section", "text", "tier", "w"])
+def ref_audit(secs):
+    """Reference-sheet entries that are NOT confirmed: shown to management, never used as hard constraints."""
+    x = secs[secs.doc.str.endswith(".sheet") & secs.tier.isin(["Provisional", "Unverified"])]
+    return x[["doc", "section", "tier", "text"]].rename(columns={"doc": "Source", "section": "Entry", "tier": "Reliability", "text": "Details"})
 def find_conflicts(secs):
-    rows = []
+    rows = []; full = secs; secs = secs[~secs.doc.str.endswith(".sheet")]
     for tp, rx in TOPICS.items():
         g = secs[secs.text.str.contains(rx, case=False, regex=True)]
         g = g.assign(val=g.text.str.extract(r"(\d+(?:\.\d+)?)\s*(?:km/h|hours|hrs|min(?:ute)?s?|%|days|units|km)", flags=re.I)[0]).dropna(subset=["val"])
         if g.val.nunique() > 1:
             win = g.sort_values("w", ascending=False, kind="stable").iloc[0]
             rows.append(dict(Topic=tp, Competing="; ".join(f"{r.val} ({r.tier}, {r.doc})" for r in g.itertuples()), Winner=f"{win.val} - {win.tier} ({win.doc} / {win.section})", Rule="Executive > SOP > Provisional"))
+    # entity cross-check: a text document quotes numbers for a keyed record (RTE-03, SUP-02 ...) that disagree with the reference sheet row
+    allp = full.copy(); sheet = allp[allp.doc.str.endswith(".sheet")]; text = allp[~allp.doc.str.endswith(".sheet")]; keyrx = r"\b[A-Z]{2,4}-\d{1,3}\b"; num = lambda t: {f"{float(x):g}" for x in re.findall(r"\d+(?:\.\d+)?", re.sub(keyrx, "", t))}
+    for r in text.itertuples():
+        for k in sorted(set(re.findall(keyrx, r.text))):
+            hit = sheet[sheet.text.str.contains(rf"\b{re.escape(k)}\b", regex=True)]
+            if hit.empty: continue
+            sr = hit.iloc[0]; dn, sn = num(r.text), num(sr.text)
+            if dn and (dn - sn):
+                win = r if r.w > sr.w else sr; rows.append(dict(Topic=k, Competing=f"{', '.join(sorted(dn - sn))} ({r.tier}, {r.doc}) vs sheet row ({sr.tier}, {sr.doc})", Winner=f"{win.tier} source ({win.doc})" + ("" if r.w > sr.w else " - sheet record kept; document value needs confirmation"), Rule="Executive > SOP > Provisional"))
     return pd.DataFrame(rows, columns=["Topic", "Competing", "Winner", "Rule"])
 def answer(q, secs, c, conf):
     stem = lambda t: {w[:5] for w in re.findall(r"[a-z0-9/]+", t.lower()) if w not in {"the", "a", "is", "what", "of", "in", "for", "and", "to", "at", "which", "have", "has", "or"}}; tok = stem(q)
@@ -342,8 +532,10 @@ def answer(q, secs, c, conf):
     secs = secs.assign(score=secs.text.map(lambda t: len(tok & stem(t))) + secs.w * .1); top = secs[secs.score >= 1.1].sort_values("score", ascending=False).head(3)
     if top.empty: return "No supporting passage found in the loaded policy documents.", None
     out = "**Evidence-backed answer**\n\n" + "\n".join(f"- {r.text}  \n  _Source: {r.doc} › {r.section} [{r.tier}]_" for r in top.itertuples())
+    weak = top[top.tier.isin(["Provisional", "Unverified"])]
+    if len(weak): out += f"\n\n⚠️ **Reliability caveat:** {len(weak)} of these passage(s) come from **{', '.join(sorted(set(weak.tier)))}** sources - verify before applying as a hard rule."
     for r in conf.itertuples():
-        if re.search(TOPICS[r.Topic], q, re.I): out += f"\n\n⚠️ **Conflict on '{r.Topic}'** - resolved by hierarchy: **{r.Winner}**."
+        if re.search(TOPICS.get(r.Topic, re.escape(r.Topic)), q, re.I): out += f"\n\n⚠️ **Conflict on '{r.Topic}'** - resolved by hierarchy: **{r.Winner}**."
     rows = [d[d[next(x for x in d.columns if re.search(HUBRX, x, re.I))] == h].head(3).assign(_sheet=s) for h in {std_hub(m) for m in re.findall(r"hub[\s_\-]*\d+", q, re.I)} for s, d in c.items() if any(re.search(HUBRX, x, re.I) for x in d.columns)]
     return out, (pd.concat(rows) if rows else None)
 
@@ -373,123 +565,229 @@ def plan(p, drop):
     return s or ["No levers moved - nothing to mitigate"]
 
 # ==== UI ====
-st.title("BUDS Round 2.5 · Night Shift"); st.caption("Bengaluru Analytics & Operations Console - Alliance University")
+HERE = os.path.dirname(os.path.abspath(__file__)); SAMPLE = os.path.join(HERE, "sample_data")
+s_data = sorted(glob.glob(os.path.join(SAMPLE, "*War_Room*.xlsx"))); s_cards = sorted(glob.glob(os.path.join(SAMPLE, "*_C[0-9][0-9].docx")))
+_blob = lambda files: tuple((f.name, f.getvalue()) for f in files)
+_pblob = lambda paths: tuple((os.path.basename(p), open(p, "rb").read()) for p in paths)
+
 with st.sidebar:
-    st.header("Data feeds")
-    up = st.file_uploader("CSV / Excel (multi-sheet)", ["csv", "xlsx", "xls"], accept_multiple_files=True)
-    dups = st.file_uploader("Policy / reference docs (PDF, TXT, DOCX)", ["pdf", "txt", "docx"], accept_multiple_files=True)
-    cards_up = st.file_uploader("📩 Constraint cards from judges (DOCX, PDF, TXT)", ["pdf", "txt", "docx"], accept_multiple_files=True)
-    drop = st.multiselect("Simulate missing feed (C08)", list(GROUPS)); key = st.text_input("Optional AI key (Anthropic) for chat answers", type="password")
-    st.caption("No upload = built-in dirty demo data.")
-raw = load_files(up) if up else demo_data(); cleaned, log = clean(raw); auto = detect(cleaned)
-with st.sidebar.expander("Column mapping (fix if auto-detect is wrong)"):
+    st.markdown(f"<div style='font-size:20px;font-weight:800;color:#F1F5F9'>🌙 Night Shift</div><div style='color:{MUTED};font-size:12px;margin-bottom:10px'>BUDS Round 2.5 · Decision Console</div>", unsafe_allow_html=True)
+    with st.expander("📁 Data feeds", expanded=True):
+        up = st.file_uploader("CSV / Excel (multi-sheet OK)", ["csv", "xlsx", "xls"], accept_multiple_files=True)
+        use_sample = st.checkbox("Load bundled Team-17 sample + C02/C08/C11 cards", value=False, disabled=not s_data, help="One-click demo using the files shipped in sample_data/") if s_data else False
+        st.caption("No upload = built-in dirty demo data." if not use_sample else "Using bundled sample workbook.")
+    with st.expander("📚 Policy docs & judge cards", expanded=True):
+        dups = st.file_uploader("Policy / reference docs (PDF, TXT, DOCX)", ["pdf", "txt", "docx"], accept_multiple_files=True)
+        cards_up = st.file_uploader("📩 Constraint cards from judges", ["pdf", "txt", "docx"], accept_multiple_files=True)
+    with st.expander("🛠 Scenario & AI options"):
+        drop = st.multiselect("Simulate missing feed (C08)", list(GROUPS), help="Treat a whole data source as unavailable for ALL tabs")
+        key = st.text_input("Optional Anthropic API key (richer chat answers)", type="password", value=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+blobs = _blob(up) if up else (_pblob(s_data) if use_sample else ())
+raw, cleaned, log = pipeline(blobs); auto = detect(cleaned)
+with st.sidebar.expander("🧭 Column mapping (fix if auto-detect is wrong)"):
     opts = ["(none)"] + [f"{s} :: {x}" for s, d in cleaned.items() for x in d.columns]; m = {}
     for r in ROLES:
-        cur = f"{auto[r][0]} :: {auto[r][1]}" if auto[r] else "(none)"; ch = st.selectbox(r, opts, index=opts.index(cur), key=f"map_{r}_{len(opts)}")
+        cur = f"{auto[r][0]} :: {auto[r][1]}" if auto[r] else "(none)"; ch = st.selectbox(r, opts, index=opts.index(cur), key=f"map_{r}_{len(opts)}_{hash(tuple(opts)) % 9999}")
         m[r] = tuple(ch.split(" :: ", 1)) if ch != "(none)" else None
-base = kpis(cleaned, m, drop); sim0 = simulate(base, NEUTRAL)
-cards = {f.name: read_doc(f) for f in cards_up}; docs = {f.name: read_doc(f) for f in dups}; docs.update(ref_docs(cleaned)); docs.update({f"Executive_Constraint_{k}": v for k, v in cards.items()}); docs = docs or DEMO_DOCS
-if "history" not in st.session_state: st.session_state.history = []
-secs = parse_docs(docs); conflicts = find_conflicts(secs)
-t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["Dashboard", "Data Health & Audit", "Ask Your Data", "Policy Q&A", "What-If Sandbox", "Constraint Cards", "Methodology", "Auto Insights"])
+base = kpis(cleaned, m, drop); sim0 = simulate(base, NEUTRAL); hs = health(raw, log)
+card_blobs = _blob(cards_up) if cards_up else (_pblob(s_cards) if use_sample and s_cards else ())
+cards = {k: v.strip() for k, v in read_docs(card_blobs).items()} if card_blobs else {}; docs = dict(read_docs(_blob(dups))) if dups else {}
+docs.update(ref_docs(cleaned)); docs.update({f"Executive_Constraint_{k}": v for k, v in cards.items()}); docs = docs or DEMO_DOCS
+for k_, d_ in (("history", []), ("stack", [])): st.session_state.setdefault(k_, d_)
+generic = len(base["missing"]) >= 4
+secs = parse_docs(docs); conflicts = find_conflicts(secs); recs = generic_recs(cleaned) if generic else recommend(base, cleaned, m)
 
-with t1:
-    if len(base["missing"]) >= 3: st.warning("Few operational columns were recognised in this dataset. Use the sidebar **Column mapping**, or open the **Auto Insights** tab - it works on any data.")
-    for g in base["missing"]: st.error(f"Missing feed: {g} - fallback surrogates active", icon="🚫")
-    fl = lambda k: "⚠ surrogate" if k in base["surrogate"] else ""
-    items = [("On-Time Delivery", f"{base['otd']:.1f}%", "OTD", OK if base["otd"] >= 85 else WARN), ("Fleet Utilisation", f"{base['util']:.1f}%", "Util", CYAN), ("Return Rate", f"{base['ret']:.1f}%", "Return", OK if base["ret"] < 8 else BAD),
-             ("Holding Cost / mo", inr(base["hold"]), "Holding", CYAN), ("Supplier Score", f"{base['sup']:.1f}", "Supplier", OK if base["sup"] >= 80 else WARN), ("Operating Deficit", inr(sim0["Deficit (cost-rev)"]), "Fleet cost", BAD if sim0["Deficit (cost-rev)"] > 0 else OK)]
-    for col, (t, v, k, cl) in zip(st.columns(6), items): col.markdown(card(t, v, cl, fl(k)), unsafe_allow_html=True)
-    ex = [(t, v) for t, v in [("Inventory Accuracy", base["inv_acc"]), ("Fleet Availability", base["fleet_avail"]), ("Suppliers Approved", base["sup_ok"])] if v is not None]
-    for col, (t, v) in zip(st.columns(3), ex): col.markdown(card(t, f"{v:.1f}%", CYAN), unsafe_allow_html=True)
-    st.info(assessment(base)); st.subheader("Recommendations (with evidence)"); recs = recommend(base, cleaned, m)
-    for x in recs: st.markdown(f"- {x}")
-    st.subheader("Explore any column"); sh = st.selectbox("Sheet", list(cleaned), key="ex_s"); d = cleaned[sh]
-    nums = [x for x in d.columns if pd.api.types.is_numeric_dtype(d[x])]; cats = [x for x in d.columns if d[x].nunique() <= 30]
+# ---------- hero ----------
+n_rows = sum(len(d) for d in cleaned.values()); hcls = "ok" if hs["score"] >= 90 else "warn" if hs["score"] >= 75 else "bad"
+mode = "Live data" if blobs else "Demo data"
+st.markdown(f"""<div class="hero"><h1>Bengaluru Operations · Night Shift Console</h1>
+<p>Upload anything → clean it with a full audit trail → KPIs, evidence-based recommendations, plain-English Q&A, policy reasoning and live what-if simulation.</p>
+<span class="pill cy">● {mode}</span><span class="pill">{len(cleaned)} sheets · {n_rows:,} rows</span><span class="pill {hcls}">Data health {hs['score']:.0f}/100</span>
+<span class="pill">{len(log)} cleaning steps logged</span><span class="pill {'cy' if generic else 'warn' if base['surrogate'] or base['missing'] else 'ok'}">{'🧭 Generic dataset mode' if generic else '⚠ ' + str(len(base['surrogate'])) + ' surrogate KPI(s)' if base['surrogate'] else 'All KPIs from real data'}</span>
+{''.join(f'<span class="pill bad">Feed off: {g}</span>' for g in drop)}</div>""", unsafe_allow_html=True)
+
+T = st.tabs(["📊 Command Center", "🧪 Data Health", "💬 Ask Your Data", "📚 Policy Q&A", "🎛️ What-If", "⚡ Constraint Cards", "🔎 Auto Insights", "📘 Methodology"])
+
+def gauge(title, val, lo_bad, lo_ok, h=190):
+    f = go.Figure(go.Indicator(mode="gauge+number", value=val, number=dict(suffix="%", font=dict(size=28, color="#F8FAFC")), title=dict(text=title, font=dict(size=13, color=MUTED)),
+        gauge=dict(axis=dict(range=[0, 100], tickcolor="#334155"), bar=dict(color=CYAN, thickness=.28), bgcolor="#0b1322", borderwidth=0,
+                   steps=[dict(range=[0, lo_bad], color="#3b1a26"), dict(range=[lo_bad, lo_ok], color="#3a3018"), dict(range=[lo_ok, 100], color="#10302a")])))
+    return style(f, h).update_layout(margin=dict(l=20, r=20, t=40, b=0))
+
+# ============ 1 COMMAND CENTER ============
+with T[0]:
+    if 3 <= len(base["missing"]) < 4: st.warning("Few operational columns were recognised. Use the sidebar **Column mapping**, or open **Auto Insights** - it works on any data.")
+    for g in ([] if generic else base["missing"]): st.error(f"Missing feed: {g} — fallback surrogates active", icon="🚫")
+    items = []
+    if generic:
+        st.info("🧭 **Generic dataset mode** — no operations feeds (orders, fleet, inventory, returns, suppliers) were recognised, so operations KPIs are replaced by dataset-agnostic KPIs and recommendations. Ask Your Data, Auto Insights and What-If still work; use the sidebar **Column mapping** to teach the app your columns.")
+        gk = generic_kpis(cleaned)
+        for col, (t, v, sub) in zip(st.columns(len(gk)), gk): col.markdown(kpi(t, v, CYAN, sub), unsafe_allow_html=True)
+        section("🎯 Recommendations, with evidence")
+        for r_ in recs: insight(re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", r_), WARN if "risk" in r_ or "outlier" in r_ else CYAN)
+    else:
+        sc = lambda k: "surrogate" if k in base["surrogate"] else ""; dfc = sim0["Deficit (cost-rev)"]
+        items = [("On-Time Delivery", f"{base['otd']:.1f}%", "OTD", OK if base["otd"] >= 85 else BAD if base["otd"] < 60 else WARN, "target ≥ 85%"), ("Fleet Utilisation", f"{base['util']:.1f}%", "Util", CYAN, "sweet spot 65–90%"),
+                 ("Return Rate", f"{base['ret']:.1f}%", "Return", OK if base["ret"] < 8 else BAD, "alert > 8%"), ("Holding Cost / mo", inr(base["hold"]), "Holding", VIOLET, "24% annual carrying"),
+                 ("Supplier Score", f"{base['sup']:.1f}", "Supplier", OK if base["sup"] >= 80 else WARN, "target ≥ 80"), ("Operating Deficit", inr(dfc), "Fleet cost", BAD if dfc > 0 else OK, "cost − revenue")]
+        for col, (t, v, k, cl, sub) in zip(st.columns(6), items): col.markdown(kpi(t, v, cl, sub, sc(k)), unsafe_allow_html=True)
+        ex = [(t, v, sub) for t, v, sub in [("Inventory Accuracy", base["inv_acc"], "system = physical"), ("Fleet Availability", base["fleet_avail"], "operable vehicles"), ("Suppliers Approved", base["sup_ok"], "fully approved")] if v is not None]
+        if ex:
+            st.write(""); 
+            for col, (t, v, sub) in zip(st.columns(max(3, len(ex))), ex): col.markdown(kpi(t, f"{v:.1f}%", OK if v >= 80 else WARN if v >= 50 else BAD, sub), unsafe_allow_html=True)
+        g1, g2, g3 = st.columns(3)
+        with g1: show(gauge("On-time delivery", base["otd"], 60, 85), 190)
+        with g2: show(gauge("Fleet utilisation", base["util"], 50, 65), 190)
+        with g3: show(gauge("Data health score", hs["score"], 75, 90), 190)
+        st.info(assessment(base))
+        section("🎯 Recommendations, with evidence")
+        for r_ in recs:
+            ac = BAD if re.search(r"deficit|unreliable|Raise on-time|Fleet is stretched", r_) else WARN if re.search(r"⚠|under-used|weak|high|low|Only", r_) else CYAN
+            insight(re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", r_), ac)
+        section("📈 Operational view")
+        a, b2 = st.columns(2); h = hub_otd(cleaned, m)
+        if h is not None: 
+            with a: show(go.Figure(go.Bar(x=h.index, y=h.values, marker_color=[OK if v >= 85 else WARN if v >= 50 else BAD for v in h.values], text=[f"{v:.0f}%" for v in h.values], textposition="outside")).update_layout(title="On-time delivery % by hub", yaxis_range=[0, 105]))
+        sm = status_mix(cleaned, m)
+        if sm is not None:
+            with b2: show(go.Figure(go.Pie(labels=sm.index.astype(str), values=sm.values, hole=.62, marker=dict(colors=[CYAN, VIOLET, WARN, BAD, OK, MUTED]), textinfo="none", hovertemplate="%{label}: %{value} (%{percent})")).update_layout(title="Order status mix", legend=dict(orientation="v", x=1.0, y=.5)))
+        tr = daily_trend(cleaned, m)
+        if tr is not None:
+            f = go.Figure(go.Bar(x=tr.index, y=tr["Orders"], name="Orders", marker_color=CYAN, opacity=.75))
+            if "OTD %" in tr: f.add_trace(go.Scatter(x=tr.index, y=tr["OTD %"], name="OTD %", yaxis="y2", line=dict(color=WARN, width=2)))
+            show(f.update_layout(title="Daily orders & on-time %", yaxis2=dict(overlaying="y", side="right", range=[0, 100], gridcolor="rgba(0,0,0,0)")), 300)
+    section("🧩 Explore any column")
+    sh = st.selectbox("Sheet", list(cleaned), key="ex_s"); d = cleaned[sh]; nums = [x for x in d.columns if pd.api.types.is_numeric_dtype(d[x])]; cats = [x for x in d.columns if d[x].nunique() <= 30]
     if nums and cats:
-        a, b2 = st.columns(2); y, xg = a.selectbox("Measure", nums), b2.selectbox("Group by", cats); g = d.groupby(xg)[y].sum().reset_index()
-        st.plotly_chart(style(go.Figure(go.Bar(x=g[xg].astype(str), y=g[y], marker_color=CYAN)).update_layout(title=f"{y} by {xg}")), width="stretch")
-    h = hub_otd(cleaned, m)
-    if h is not None: st.plotly_chart(style(go.Figure(go.Bar(x=h.index, y=h.values, marker_color=[OK if v >= 85 else WARN if v >= 50 else BAD for v in h.values])).update_layout(title="On-time delivery % by hub")), width="stretch")
-    st.download_button("⬇ Download report", "# BUDS Night Shift report\n\n" + assessment(base) + "\n\n## Recommendations\n" + "\n".join(f"- {x}" for x in recs), "report.md")
+        a, b2, c3 = st.columns(3); y, xg, ag = a.selectbox("Measure", nums), b2.selectbox("Group by", cats), c3.selectbox("Aggregate", ["sum", "mean", "count", "max"])
+        g = d.groupby(xg)[y].agg(ag).reset_index(); show(go.Figure(go.Bar(x=g[xg].astype(str), y=g[y], marker_color=CYAN)).update_layout(title=f"{ag.title()} of {y} by {xg}"))
+    st.write(""); d1, d2 = st.columns(2)
+    rep = "# BUDS Night Shift report\n\n" + assessment(base) + "\n\n## KPIs\n" + "\n".join(f"- {t}: {v}" for t, v, *_ in (items or generic_kpis(cleaned))) + "\n\n## Recommendations\n" + "\n".join(f"- {x}" for x in recs)
+    d1.download_button("⬇ Management report (.md)", rep, "report.md", use_container_width=True)
+    d2.download_button("⬇ Full audit pack (.xlsx: KPIs, log, cleaned data, scenarios)", build_xlsx(base, sim0, recs, log, cleaned, st.session_state.history, conflicts, hs), "night_shift_audit_pack.xlsx", use_container_width=True)
 
-with t2:
-    st.subheader("Data Health & Audit Trail"); st.caption("Raw uploads are preserved unchanged; every transformation applies only to the cleaned copy.")
-    a, b_ = st.columns(2); a.metric("Transformations logged", len(log)); b_.metric("Rows touched", sum(x["Rows affected"] for x in log))
-    st.dataframe(pd.DataFrame(log), width="stretch"); st.markdown("**Data structure profile**"); st.dataframe(profile(raw), width="stretch")
-    sh = st.selectbox("Compare sheet", list(raw)); c1, c2 = st.columns(2); c1.markdown("**Raw (immutable)**"); c1.dataframe(raw[sh].head(25)); c2.markdown("**Cleaned**"); c2.dataframe(cleaned[sh].head(25))
+# ============ 2 DATA HEALTH ============
+with T[1]:
+    section("🧪 Data Health & Audit Trail"); st.caption("Raw uploads are preserved unchanged; every transformation applies only to the cleaned copy.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(kpi("Health score", f"{hs['score']:.0f}/100", OK if hs["score"] >= 90 else WARN if hs["score"] >= 75 else BAD, "mean of 3 dimensions"), unsafe_allow_html=True)
+    c2.markdown(kpi("Completeness", f"{hs['completeness']:.1f}%", CYAN, f"{hs['missing']:,} empty cells"), unsafe_allow_html=True)
+    c3.markdown(kpi("Uniqueness", f"{hs['uniqueness']:.1f}%", VIOLET, f"{hs['dups']:,} duplicate rows"), unsafe_allow_html=True)
+    c4.markdown(kpi("Validity", f"{hs['validity']:.1f}%", WARN, f"{hs['fixed']:,} rows repaired / flagged"), unsafe_allow_html=True)
+    st.write(""); st.dataframe(sheet_health(raw, cleaned), width="stretch", hide_index=True)
+    L = pd.DataFrame(log); a, b_ = st.columns(2); a.metric("Transformations logged", len(log)); b_.metric("Rows touched", int(L["Rows affected"].sum()) if len(L) else 0)
+    if len(L):
+        agg = L.groupby("Transformation")["Rows affected"].sum().sort_values()
+        show(go.Figure(go.Bar(x=agg.values, y=agg.index, orientation="h", marker_color=VIOLET)).update_layout(title="Rows affected by transformation type"), max(260, 28 * len(agg) + 80))
+    st.markdown("**Audit log**"); st.dataframe(L, width="stretch", hide_index=True)
+    with st.expander("Data structure profile (types, missing, unique)"): st.dataframe(profile(raw), width="stretch", hide_index=True)
+    section("🔬 Raw vs cleaned"); sh = st.selectbox("Compare sheet", list(raw)); c1, c2 = st.columns(2); c1.markdown("**Raw (immutable)**"); c1.dataframe(raw[sh].head(25)); c2.markdown("**Cleaned**"); c2.dataframe(cleaned[sh].head(25))
+    st.download_button(f"⬇ Cleaned '{sh}' (CSV)", cleaned[sh].to_csv(index=False), f"clean_{sh}.csv")
 
-with t3:
-    st.subheader("Ask your data in plain English"); st.caption("Examples: 'total revenue by hub', 'average used hours by hub', 'how many orders by status'")
-    q = st.text_input("Question", "total revenue by hub", key="q_data")
+# ============ 3 ASK YOUR DATA ============
+with T[2]:
+    section("💬 Ask your data in plain English"); st.caption("Understands filters (e.g. 'H02', 'Delivered'), 'top 3', average / count / max / min. Add an API key in the sidebar for richer narrative answers.")
+    st.session_state.setdefault("q_data", "total delivery fee by hub")
+    ex = ["total delivery fee by hub", "average actual cycle time by hub", "how many orders by order status", "top 3 order value by product category", "average distance for H02"]
+    for col, e in zip(st.columns(len(ex)), ex): col.button(e, key=f"chip_{e}", on_click=lambda e=e: st.session_state.update(q_data=e), use_container_width=True)
+    q = st.text_input("Question", key="q_data")
     if q:
         t, msg, code = ask(q, cleaned); st.markdown(msg)
         if t is not None:
-            st.dataframe(t, width="stretch"); st.caption(f"Calculation used: `{code}`")
-            if len(t) > 1: st.plotly_chart(style(go.Figure(go.Bar(x=t.iloc[:, 0].astype(str), y=t.iloc[:, 1], marker_color=CYAN))), width="stretch")
+            a, b2 = st.columns([1, 1.3]); a.dataframe(t, width="stretch", hide_index=True); a.caption(f"Calculation used: `{code}`")
+            if len(t) > 1 and t.shape[1] > 1: 
+                with b2: show(go.Figure(go.Bar(x=t.iloc[:, 0].astype(str), y=t.iloc[:, 1], marker_color=CYAN)), 300)
         if key:
             try: st.markdown("**AI analyst answer**"); st.markdown(llm(q, assessment(base) + "\n" + str(base) + "\n" + "\n".join(f"{s}:\n{d.head(15).to_string()}" for s, d in cleaned.items()), key))
             except Exception as e: st.warning(f"AI answer unavailable: {e}")
 
-with t4:
-    st.subheader("Rule hierarchy: Executive Overrides > SOP > Provisional Notes")
-    if len(conflicts): st.warning("Conflicting rules detected and resolved"); st.dataframe(conflicts, width="stretch")
+# ============ 4 POLICY Q&A ============
+with T[3]:
+    section("📚 Rule hierarchy: Executive Override > SOP > Provisional"); st.caption(f"{len(secs)} passages parsed from {len(docs)} document(s) — includes route/service reference sheets and any uploaded constraint cards.")
+    if len(conflicts): st.warning("Conflicting rules detected and resolved"); st.dataframe(conflicts, width="stretch", hide_index=True)
     else: st.success("No conflicting numeric rules detected.")
-    q = st.text_input("Ask a policy / data question", "What is the speed limit in zone A and the driver shift limit at Hub 3?", key="q_pol")
+    aud = ref_audit(secs)
+    if len(aud): st.warning(f"{len(aud)} reference entr{'y is' if len(aud) == 1 else 'ies are'} provisional / unverified — surfaced for review, **not** used as hard constraints"); st.dataframe(aud, width="stretch", hide_index=True)
+    q = st.text_input("Ask a policy / data question", "What is the speed limit in zone A and the driver shift limit at Hub 3?" if docs is DEMO_DOCS else "Which routes have vehicle restrictions and is the restriction status confirmed?", key="q_pol")
     if q:
         ans, rows = answer(q, secs, cleaned, conflicts); st.markdown(ans)
         if rows is not None: st.markdown("**Dataset evidence (cleaned rows)**"); st.dataframe(rows)
-    with st.expander("Parsed policy passages"): st.dataframe(secs[["doc", "section", "tier", "text"]])
+    with st.expander("Parsed policy passages"): st.dataframe(secs[["doc", "section", "tier", "text"]], hide_index=True)
 
-with t5:
-    st.subheader("Strategy Sandbox"); c = st.columns(4)
-    p = dict(demand=c[0].slider("Demand spike %", -30, 100, 0), fuel=c[1].slider("Fuel/Fleet cost ×", .8, 2.0, 1.0, .05), drivers=c[2].slider("Driver availability %", 30, 100, 100), delay=c[3].slider("Warehouse delay (min)", 0, 120, 0))
-    res = simulate(base, p); k = st.columns(4)
+# ============ 5 WHAT-IF ============
+with T[4]:
+    section("🎛️ Strategy sandbox"); c = st.columns(4)
+    p = dict(demand=c[0].slider("Demand spike %", -30, 100, 0), fuel=c[1].slider("Fuel / fleet cost ×", .8, 2.0, 1.0, .05), drivers=c[2].slider("Driver availability %", 30, 100, 100), delay=c[3].slider("Warehouse delay (min)", 0, 120, 0))
+    res = simulate(base, p); k = st.columns(5)
     k[0].metric("Margin %", f"{res['Margin %']:.1f}", f"{res['Margin %'] - sim0['Margin %']:+.1f} pts"); k[1].metric("Deficit", inr(res["Deficit (cost-rev)"]), inr(res["Deficit (cost-rev)"] - sim0["Deficit (cost-rev)"]), delta_color="inverse")
     k[2].metric("Delay risk %", f"{res['Delay Risk %']:.0f}", f"{res['Delay Risk %'] - sim0['Delay Risk %']:+.0f}", delta_color="inverse"); k[3].metric("Demand served %", f"{res['Demand Served %']:.0f}")
-    st.plotly_chart(style(go.Figure([go.Bar(name="Baseline", x=["Revenue", "Op. Cost"], y=[sim0["Revenue"], sim0["Op. Cost"]], marker_color=BORDER), go.Bar(name="Scenario", x=["Revenue", "Op. Cost"], y=[res["Revenue"], res["Op. Cost"]], marker_color=CYAN)])), width="stretch")
+    sat = (p["drivers"] / 100) / max(base["util"] / 100, .01) * 100 - 100; k[4].metric("Fleet saturates at demand", f"{sat:+.0f}%", help="Demand change at which fleet load reaches 100% given current driver availability")
+    a, b2 = st.columns(2)
+    with a: show(go.Figure([go.Bar(name="Baseline", x=["Revenue", "Op. Cost"], y=[sim0["Revenue"], sim0["Op. Cost"]], marker_color=BORDER), go.Bar(name="Scenario", x=["Revenue", "Op. Cost"], y=[res["Revenue"], res["Op. Cost"]], marker_color=CYAN)]).update_layout(title="Revenue vs cost"))
+    sn = sensitivity(base).sort_values("Δ Deficit (₹)")
+    with b2: show(go.Figure(go.Bar(x=sn["Δ Deficit (₹)"], y=sn["Shock"], orientation="h", marker_color=[BAD if v > 0 else OK for v in sn["Δ Deficit (₹)"]])).update_layout(title="Sensitivity: which shock hurts most? (Δ deficit)"))
+    st.caption("Sensitivity applies one standard shock at a time to the live baseline, so you can rank which risk to hedge first. A zero bar means that lever has no effect at current utilisation (spare fleet capacity absorbs it).")
 
-with t6:
-    st.subheader("Live Constraint Card Simulator")
-    st.caption("New card from the judges? Upload it in the sidebar (DOCX/PDF/TXT), pick a preset, or type it. The app proposes lever settings - you can adjust them before simulating.")
+# ============ 6 CONSTRAINT CARDS ============
+def render(text, cp, cdrop, notes):
+    ab = kpis(cleaned, m, tuple(set(drop) | set(cdrop))); before, after = simulate(base, NEUTRAL), simulate(ab, cp); diff = pd.DataFrame({"Before": before, "After": after}); diff["Δ"] = diff.After - diff.Before
+    moved = cp != NEUTRAL or bool(cdrop) or bool(drop); sev, scol = severity(before, after, moved); st.markdown(f"#### 🔴 {card_title(text)}  <span class='pill' style='color:{scol};border-color:{scol}'>SEVERITY: {sev}</span>", unsafe_allow_html=True)
+    a, b2 = st.columns([1, 1.2]); a.dataframe(diff.style.format("{:,.1f}"), width="stretch")
+    ks = ["Margin %", "Delay Risk %", "Fleet Load %"]
+    with b2: show(go.Figure([go.Bar(name="Before", x=ks, y=[before[x] for x in ks], marker_color=OK), go.Bar(name="After", x=ks, y=[after[x] for x in ks], marker_color=BAD)]), 280)
+    if cdrop or drop: st.warning(assessment(ab))
+    l, r = st.columns(2); l.markdown("**Mitigation action plan**"); [l.markdown(f"{i}. {s_}") for i, s_ in enumerate(plan(cp, cdrop), 1)]
+    r.markdown("**Audit log — assumptions**"); [r.markdown(f"- {s_}") for s_ in notes + [f"Final lever settings: {cp}", "Raw data unchanged; scenario computed on a cleaned copy"]]
+    st.session_state.history.append({"Card": card_title(text)[:60], "Severity": sev, "Margin % after": round(after["Margin %"], 1), "Delay risk % after": round(after["Delay Risk %"]), "Levers": str({k_: round(v, 2) for k_, v in cp.items()}), "Feeds lost": ", ".join(cdrop) or "-"})
+
+with T[5]:
+    section("⚡ Live constraint card simulator")
+    st.caption("New card from the judges? Upload it in the sidebar (DOCX / PDF / TXT), pick a preset or type it. The app proposes lever settings — adjust them, then simulate. **Stack** several cards to see their combined impact.")
     srcs = ["Preset"] + [f"Uploaded: {k}" for k in cards] + ["Type my own"]; src = st.selectbox("Card source", srcs, index=1 if cards else 0)
     if src == "Preset": pre = st.selectbox("Preset card", list(PRESETS)); text = PRESETS[pre]
     elif src == "Type my own": text = st.text_area("Describe the new condition", "Fuel +40% and drivers down 30%, hub outage", key="card_txt")
     else: text = cards[src.replace("Uploaded: ", "")]; st.text_area("Card text (read-only)", text[:1500], disabled=True)
     cp0, cdrop0, notes0 = parse_card(text); k_ = abs(hash(text)) % 10**6; cl = st.columns(4)
-    cp = dict(demand=cl[0].slider("Demand %", -50, 150, int(max(-50, min(150, cp0["demand"]))), key=f"d{k_}"), fuel=cl[1].slider("Fuel/Fleet cost ×", .5, 3.0, float(max(.5, min(3.0, cp0["fuel"]))), .05, key=f"f{k_}"),
+    cp = dict(demand=cl[0].slider("Demand %", -50, 150, int(max(-50, min(150, cp0["demand"]))), key=f"d{k_}"), fuel=cl[1].slider("Fuel / fleet cost ×", .5, 3.0, float(max(.5, min(3.0, cp0["fuel"]))), .05, key=f"f{k_}"),
               drivers=cl[2].slider("Driver availability %", 5, 100, int(max(5, min(100, cp0["drivers"]))), key=f"v{k_}"), delay=cl[3].slider("Warehouse delay (min)", 0, 240, int(min(240, cp0["delay"])), key=f"y{k_}"))
     cdrop = st.multiselect("Data feeds unavailable under this card", list(GROUPS), default=cdrop0, key=f"g{k_}")
+    if re.search(r"data source|source .*unavailable|becomes unavailable", text, re.I) and not cdrop: st.info("This card says a data source is unavailable but doesn't name it — pick the affected feed above and the KPIs will fall back to surrogates with an assessment note.")
     dq = [w for w in ("duplicate", "inconsisten", "invalid date", "missing value", "conflicting status") if w in text.lower()]
-    if dq: st.info(f"Data-integrity constraint detected ({', '.join(dq)}): the cleaning engine already handles this - see Data Health & Audit. Raw data stays untouched.")
-    if st.button("⚡ Simulate Live Constraint Card", type="primary"):
-        notes = notes0 + [f"Final lever settings used: {cp}"] + ([f"Feeds treated as unavailable: {', '.join(cdrop)}"] if cdrop else []); ab = kpis(cleaned, m, tuple(set(drop) | set(cdrop)))
-        before, after = simulate(base, NEUTRAL), simulate(ab, cp); diff = pd.DataFrame({"Before": before, "After": after}); diff["Δ"] = diff.After - diff.Before
-        st.markdown(f"#### 🔴 {text[:120]}"); st.dataframe(diff.style.format("{:,.1f}"), width="stretch")
-        ks = ["Margin %", "Delay Risk %", "Fleet Load %"]; st.plotly_chart(style(go.Figure([go.Bar(name="Before", x=ks, y=[before[x] for x in ks], marker_color=OK), go.Bar(name="After", x=ks, y=[after[x] for x in ks], marker_color=BAD)])), width="stretch")
-        if cdrop: st.warning(assessment(ab))
-        l, r = st.columns(2); l.markdown("**Mitigation action plan**"); [l.markdown(f"{i}. {s_}") for i, s_ in enumerate(plan(cp, cdrop), 1)]
-        r.markdown("**Audit log - assumptions**"); [r.markdown(f"- {s_}") for s_ in notes + ["Raw data unchanged; scenario computed on a cleaned copy"]]
-        st.session_state.history.append({"Card": text[:60], "Margin % after": round(after["Margin %"], 1), "Delay risk % after": round(after["Delay Risk %"]), "Levers": str(cp), "Feeds lost": ", ".join(cdrop) or "-"})
+    if dq: st.info(f"Data-integrity constraint detected ({', '.join(dq)}): the cleaning engine already handles this — see **Data Health**. Raw data stays untouched.")
+    if re.search(r"provisional|reference documents?|documents may disagree|route restriction|supplier rules", text, re.I): st.info("Document/rule constraint detected — see the **Policy Q&A** tab for hierarchy-based conflict resolution.")
+    b1, b2, b3 = st.columns([1.3, 1, 1]); notes = notes0 + ([f"Feeds treated as unavailable: {', '.join(cdrop)}"] if cdrop else [])
+    if b1.button("⚡ Simulate this card", type="primary", use_container_width=True): render(text, cp, cdrop, notes)
+    if b2.button("➕ Add to stack", use_container_width=True): st.session_state.stack.append(dict(text=card_title(text)[:80], p=cp, drop=list(cdrop))); st.toast("Card added to stack")
+    if b3.button("🗑 Clear stack", use_container_width=True): st.session_state.stack = []
+    if st.session_state.stack:
+        section(f"🧱 Stacked cards ({len(st.session_state.stack)}) — combined impact")
+        st.dataframe(pd.DataFrame([{"Card": s["text"], "Demand %": s["p"]["demand"], "Fuel ×": round(s["p"]["fuel"], 2), "Drivers %": s["p"]["drivers"], "Delay min": s["p"]["delay"], "Feeds lost": ", ".join(s["drop"]) or "-"} for s in st.session_state.stack]), width="stretch", hide_index=True)
+        if st.button("⚡ Simulate combined stack", type="primary"): sp, sd = combine(st.session_state.stack); render("COMBINED: " + " + ".join(s["text"][:25] for s in st.session_state.stack), sp, list(sd), ["Cards combined: demand and delay add, fuel multiplies, driver availability multiplies"])
     if st.session_state.history:
-        with st.expander(f"Constraint card history ({len(st.session_state.history)})"): st.dataframe(pd.DataFrame(st.session_state.history), width="stretch")
+        with st.expander(f"Constraint card history ({len(st.session_state.history)})"): st.dataframe(pd.DataFrame(st.session_state.history), width="stretch", hide_index=True)
 
-with t7:
-    st.subheader("How the numbers are calculated")
-    st.markdown("""- **On-time delivery** = delivered orders where actual cycle minutes ≤ promised minutes (or delivery date ≤ promised date). Rows with missing/invalid times are excluded from the denominator, never guessed.
-- **Fleet utilisation** = used hours ÷ capacity hours, or (if absent) Assigned ÷ operable (Assigned+Available+Standby) vehicle records. **Fleet availability** = operable ÷ all records. **Fleet cost** = order variable cost, else Σ km × cost/km, else runs × average route base cost.
-- **Return rate** = share of orders flagged returned. **Holding cost / month** = Σ(qty × unit cost) × 24% ÷ 12 (assumed 24% annual carrying rate).
-- **Supplier score** = 60% on-time % + 40% × (100 − defect %); if absent, approval score (Approved 100, Conditional 60, other 30). **Operating deficit** = operating cost − revenue (revenue = delivery fees; cost = variable + hub fixed cost × days + holding + 30% of revenue lost on returns). **Return rate** = return requests ÷ orders when no return flag exists.
-- **What-if**: load = demand × utilisation ÷ driver availability; if load > 100% only 1/load of demand is served. Delay risk = (100 − OTD) + 0.35 × delay min + 60 × overload.
-- **Policy conflicts**: highest tier wins - Executive > SOP > Provisional.
-- **Cleaning**: duplicates dropped, hub IDs standardised to BLR_HUB_NN, bad dates blanked, missing numbers → median, missing text → UNKNOWN, 'Delivered' without delivery date → 'In Transit'. Raw data is never modified.""")
-    st.warning("**Limitations**: surrogate values (85% OTD, 6% returns, 70% utilisation, 80 supplier) are benchmarks, not facts; the simulator is a simplified linear model; column auto-detection can be corrected in the sidebar mapping; policy rule reading is keyword-based; figures are indicative (±15%) when feeds are missing.")
-
-with t8:
-    st.subheader("Auto Insights - works on any dataset"); st.caption("No column names needed: automatic checks for gaps, outliers, dominant categories and relationships.")
-    for x in insights(cleaned): st.markdown(x)
+# ============ 7 AUTO INSIGHTS ============
+with T[6]:
+    section("🔎 Auto insights — works on any dataset"); st.caption("No column names needed: automatic checks for gaps, outliers, dominant categories and relationships.")
+    for x in insights(cleaned): insight(x.lstrip("- ").replace("**", ""), VIOLET if x.startswith("-") else CYAN)
     sh = st.selectbox("Sheet to chart", list(cleaned), key="ai_s"); d = cleaned[sh]; nm = [x for x in d.columns if pd.api.types.is_numeric_dtype(d[x])]
     if nm:
-        col = st.selectbox("Distribution of", nm, key="ai_c"); st.plotly_chart(style(go.Figure(go.Histogram(x=d[col], marker_color=CYAN)).update_layout(title=f"Distribution of {col}")), width="stretch")
+        col = st.selectbox("Distribution of", nm, key="ai_c"); show(go.Figure(go.Histogram(x=d[col], marker_color=CYAN)).update_layout(title=f"Distribution of {col}"))
     if len(nm) > 2:
-        cm = d[nm[:12]].corr(); st.plotly_chart(style(go.Figure(go.Heatmap(z=cm.values, x=cm.columns, y=cm.index, colorscale="Tealgrn", zmin=-1, zmax=1)).update_layout(title="Correlation map"), 420), width="stretch")
+        cm = d[nm[:12]].corr(); show(go.Figure(go.Heatmap(z=cm.values, x=cm.columns, y=cm.index, colorscale="Tealgrn", zmin=-1, zmax=1)).update_layout(title="Correlation map"), 430)
+
+# ============ 8 METHODOLOGY ============
+with T[7]:
+    section("📘 How the numbers are calculated")
+    st.markdown("""- **On-time delivery** = delivered orders where actual cycle minutes ≤ promised minutes (or delivery date ≤ promised date). Rows with missing/invalid times are excluded from the denominator, never guessed.
+- **Fleet utilisation** = used hours ÷ capacity hours, or (if absent) Assigned ÷ operable (Assigned + Available + Standby) vehicle records. **Fleet availability** = operable ÷ all records. **Fleet cost** = order variable cost, else Σ km × cost/km, else runs × average route base cost.
+- **Return rate** = share of orders flagged returned (or return requests ÷ orders when no flag exists). **Holding cost / month** = Σ(qty × unit cost) × 24% ÷ 12 (assumed annual carrying rate).
+- **Supplier score** = 60% on-time % + 40% × (100 − defect %); if absent, approval score (Approved 100, Conditional 60, other 30). **Operating deficit** = operating cost − revenue (revenue = delivery fees; cost = variable + hub fixed cost × days + holding + 30% of revenue lost on returns).
+- **What-if**: load = demand × utilisation ÷ driver availability; if load > 100% only 1/load of demand is served. Delay risk = (100 − OTD) + 0.35 × delay min + 60 × overload. **Saturation point** = driver availability ÷ utilisation − 1.
+- **Sensitivity** applies one standard shock (demand +20%, fuel ×1.2, drivers −20%, +30 min delay) to the live baseline and ranks the change in deficit.
+- **Stacked cards**: demand % and delay minutes add; fuel multiplier and driver availability multiply; lost feeds are unioned.
+- **Policy conflicts**: highest tier wins — Executive Override > SOP > Provisional.
+- **Data health score** = mean of Completeness (1 − empty cells ÷ cells), Uniqueness (1 − exact duplicate rows ÷ rows) and Validity (1 − repaired/flagged rows ÷ rows), measured on the raw upload.
+- **Cleaning**: duplicates dropped, hub IDs standardised, bad dates blanked, missing numbers → median (except time/distance/rating fields, which stay blank), missing text → UNKNOWN, 'Delivered' without delivery date → 'In Transit'. **Raw data is never modified.**""")
+    st.warning("**Limitations**: surrogate values (85% OTD, 6% returns, 70% utilisation, 80 supplier) are benchmarks, not facts; the simulator is a simplified linear model; column auto-detection can be corrected in the sidebar mapping; policy reading is keyword-based; figures are indicative (±15%) when feeds are missing; NL Q&A without an API key is rule-based and may miss complex questions.")
