@@ -283,19 +283,41 @@ def llm(q, ctx, key):
     r = anthropic.Anthropic(api_key=key).messages.create(model="claude-sonnet-4-6", max_tokens=800, messages=[{"role": "user", "content": f"You are an operations analyst. Answer only from this data context, cite numbers, state limits.\n\n{ctx}\n\nQuestion: {q}"}])
     return r.content[0].text
 
-# ============ POLICY RAG (C11) ============
+# ============ AUTO INSIGHTS (any dataset, no column names needed) ============
+def insights(c):
+    out = []
+    for s_, df in c.items():
+        out.append(f"**{s_}**: {len(df):,} rows × {df.shape[1]} columns")
+        bad = [f"{k} ({v:.0%})" for k, v in df.isna().mean().items() if v > .2]
+        if bad: out.append(f"- Heavily incomplete columns: {', '.join(bad[:5])}")
+        for k in [k for k in df.columns if pd.api.types.is_numeric_dtype(df[k]) and df[k].nunique() > 10][:8]:
+            o = int((((df[k] - df[k].mean()) / (df[k].std() or 1)).abs() > 3).sum())
+            if o: out.append(f"- {k}: {o} extreme outliers (>3σ) - entry errors or genuine spikes, worth checking")
+        for k in [k for k in df.columns if 2 <= df[k].nunique() <= 15 and not pd.api.types.is_numeric_dtype(df[k])][:6]:
+            vc = df[k].value_counts(normalize=True)
+            if vc.iloc[0] > .4: out.append(f"- {k}: '{vc.index[0]}' dominates with {vc.iloc[0]:.0%} of rows")
+        num = df.select_dtypes("number").loc[:, lambda d: d.nunique() > 10]
+        if num.shape[1] > 1:
+            cm = num.corr().abs().where(~np.eye(num.shape[1], dtype=bool)).stack()
+            if len(cm) and cm.max() > .5: a, b = cm.idxmax(); out.append(f"- Strongest relationship: {a} vs {b} (|r| = {cm.max():.2f}) - correlation, not proof of cause")
+    return out
+
 DEMO_DOCS = {"SOP_Operations.txt": "1. Driver Shift Policy\nDrivers shall not exceed 9 hours per shift. Standard Operating Procedure.\n2. Route Speed\nVehicles must not exceed 40 km/h in zone A routes. Standard Operating Procedure.",
              "Executive_Override.txt": "1. Night Shift Directive\nExecutive Override: drivers may extend to 11 hours per shift during hub outages.\n2. Route Speed\nExecutive Override: speed limit in zone A is 30 km/h during monsoon.",
              "Provisional_Notes.txt": "1. Draft Speed Note\nProvisional note: zone A speed limit may rise to 50 km/h. Not yet approved."}
-TIERS = [("Executive", 4, r"executive|override|directive|ceo"), ("Unverified", 1, r"unverified"), ("Provisional", 2, r"provisional|draft"), ("SOP", 3, r"standard operating|sop|policy|confirmed")]
+TIERS = [("Executive", 4, r"executive|override|directive|ceo|constraint"), ("Unverified", 1, r"unverified"), ("Provisional", 2, r"provisional|draft"), ("SOP", 3, r"standard operating|sop|policy|confirmed")]
 TOPICS = {"speed": r"speed|km/h", "shift": r"shift|hours", "return": r"return|refund", "hub": r"hub|outage", "route": r"route|vehicle|restrict", "ontime": r"on-?time|sla|promis", "supplier": r"supplier|approv|lead time"}
 def ref_docs(c):
     """Reference sheets (routes, service rules) become policy passages; 'Confirmed' > 'Provisional' > 'Unverified'."""
     return {f"{s_}.sheet": "\n".join(" | ".join(f"{k}: {v}" for k, v in zip(df.columns, r) if v) for r in df.fillna("").astype(str).itertuples(index=False)) for s_, df in c.items() if re.search(r"route|_ref|reference", s_, re.I)}
 def read_doc(f):
-    if f.name.lower().endswith(".pdf"):
+    n = f.name.lower()
+    if n.endswith(".pdf"):
         from pypdf import PdfReader
         return "\n".join(p.extract_text() or "" for p in PdfReader(f).pages)
+    if n.endswith(".docx"):
+        import zipfile; x = zipfile.ZipFile(f).read("word/document.xml").decode("utf8", "ignore")
+        return re.sub(r"<[^>]+>", "", re.sub(r"</w:p>|<w:br/>", "\n", x))
     return f.read().decode("utf-8", "ignore")
 def parse_docs(docs):
     secs, title = [], "Preamble"
@@ -355,7 +377,8 @@ st.title("BUDS Round 2.5 · Night Shift"); st.caption("Bengaluru Analytics & Ope
 with st.sidebar:
     st.header("Data feeds")
     up = st.file_uploader("CSV / Excel (multi-sheet)", ["csv", "xlsx", "xls"], accept_multiple_files=True)
-    dups = st.file_uploader("Policy docs (PDF/TXT)", ["pdf", "txt"], accept_multiple_files=True)
+    dups = st.file_uploader("Policy / reference docs (PDF, TXT, DOCX)", ["pdf", "txt", "docx"], accept_multiple_files=True)
+    cards_up = st.file_uploader("📩 Constraint cards from judges (DOCX, PDF, TXT)", ["pdf", "txt", "docx"], accept_multiple_files=True)
     drop = st.multiselect("Simulate missing feed (C08)", list(GROUPS)); key = st.text_input("Optional AI key (Anthropic) for chat answers", type="password")
     st.caption("No upload = built-in dirty demo data.")
 raw = load_files(up) if up else demo_data(); cleaned, log = clean(raw); auto = detect(cleaned)
@@ -365,10 +388,13 @@ with st.sidebar.expander("Column mapping (fix if auto-detect is wrong)"):
         cur = f"{auto[r][0]} :: {auto[r][1]}" if auto[r] else "(none)"; ch = st.selectbox(r, opts, index=opts.index(cur), key=f"map_{r}_{len(opts)}")
         m[r] = tuple(ch.split(" :: ", 1)) if ch != "(none)" else None
 base = kpis(cleaned, m, drop); sim0 = simulate(base, NEUTRAL)
-docs = {f.name: read_doc(f) for f in dups}; docs.update(ref_docs(cleaned)); docs = docs or DEMO_DOCS; secs = parse_docs(docs); conflicts = find_conflicts(secs)
-t1, t2, t3, t4, t5, t6, t7 = st.tabs(["Dashboard", "Data Health & Audit", "Ask Your Data", "Policy Q&A", "What-If Sandbox", "Constraint Cards", "Methodology"])
+cards = {f.name: read_doc(f) for f in cards_up}; docs = {f.name: read_doc(f) for f in dups}; docs.update(ref_docs(cleaned)); docs.update({f"Executive_Constraint_{k}": v for k, v in cards.items()}); docs = docs or DEMO_DOCS
+if "history" not in st.session_state: st.session_state.history = []
+secs = parse_docs(docs); conflicts = find_conflicts(secs)
+t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs(["Dashboard", "Data Health & Audit", "Ask Your Data", "Policy Q&A", "What-If Sandbox", "Constraint Cards", "Methodology", "Auto Insights"])
 
 with t1:
+    if len(base["missing"]) >= 3: st.warning("Few operational columns were recognised in this dataset. Use the sidebar **Column mapping**, or open the **Auto Insights** tab - it works on any data.")
     for g in base["missing"]: st.error(f"Missing feed: {g} - fallback surrogates active", icon="🚫")
     fl = lambda k: "⚠ surrogate" if k in base["surrogate"] else ""
     items = [("On-Time Delivery", f"{base['otd']:.1f}%", "OTD", OK if base["otd"] >= 85 else WARN), ("Fleet Utilisation", f"{base['util']:.1f}%", "Util", CYAN), ("Return Rate", f"{base['ret']:.1f}%", "Return", OK if base["ret"] < 8 else BAD),
@@ -424,16 +450,29 @@ with t5:
     st.plotly_chart(style(go.Figure([go.Bar(name="Baseline", x=["Revenue", "Op. Cost"], y=[sim0["Revenue"], sim0["Op. Cost"]], marker_color=BORDER), go.Bar(name="Scenario", x=["Revenue", "Op. Cost"], y=[res["Revenue"], res["Op. Cost"]], marker_color=CYAN)])), width="stretch")
 
 with t6:
-    st.subheader("Live Constraint Card Simulator"); st.caption("Pick a preset OR type any new card from the judges, e.g. 'Fuel +40% and drivers down 30%, hub outage'")
-    pre = st.selectbox("Preset card", list(PRESETS)); txt = st.text_input("Or type a custom card (overrides preset if filled)", "", key="card_txt")
+    st.subheader("Live Constraint Card Simulator")
+    st.caption("New card from the judges? Upload it in the sidebar (DOCX/PDF/TXT), pick a preset, or type it. The app proposes lever settings - you can adjust them before simulating.")
+    srcs = ["Preset"] + [f"Uploaded: {k}" for k in cards] + ["Type my own"]; src = st.selectbox("Card source", srcs, index=1 if cards else 0)
+    if src == "Preset": pre = st.selectbox("Preset card", list(PRESETS)); text = PRESETS[pre]
+    elif src == "Type my own": text = st.text_area("Describe the new condition", "Fuel +40% and drivers down 30%, hub outage", key="card_txt")
+    else: text = cards[src.replace("Uploaded: ", "")]; st.text_area("Card text (read-only)", text[:1500], disabled=True)
+    cp0, cdrop0, notes0 = parse_card(text); k_ = abs(hash(text)) % 10**6; cl = st.columns(4)
+    cp = dict(demand=cl[0].slider("Demand %", -50, 150, int(max(-50, min(150, cp0["demand"]))), key=f"d{k_}"), fuel=cl[1].slider("Fuel/Fleet cost ×", .5, 3.0, float(max(.5, min(3.0, cp0["fuel"]))), .05, key=f"f{k_}"),
+              drivers=cl[2].slider("Driver availability %", 5, 100, int(max(5, min(100, cp0["drivers"]))), key=f"v{k_}"), delay=cl[3].slider("Warehouse delay (min)", 0, 240, int(min(240, cp0["delay"])), key=f"y{k_}"))
+    cdrop = st.multiselect("Data feeds unavailable under this card", list(GROUPS), default=cdrop0, key=f"g{k_}")
+    dq = [w for w in ("duplicate", "inconsisten", "invalid date", "missing value", "conflicting status") if w in text.lower()]
+    if dq: st.info(f"Data-integrity constraint detected ({', '.join(dq)}): the cleaning engine already handles this - see Data Health & Audit. Raw data stays untouched.")
     if st.button("⚡ Simulate Live Constraint Card", type="primary"):
-        text = txt or PRESETS[pre]; cp, cdrop, notes = parse_card(text); ab = kpis(cleaned, m, tuple(set(drop) | set(cdrop)))
+        notes = notes0 + [f"Final lever settings used: {cp}"] + ([f"Feeds treated as unavailable: {', '.join(cdrop)}"] if cdrop else []); ab = kpis(cleaned, m, tuple(set(drop) | set(cdrop)))
         before, after = simulate(base, NEUTRAL), simulate(ab, cp); diff = pd.DataFrame({"Before": before, "After": after}); diff["Δ"] = diff.After - diff.Before
-        st.markdown(f"#### 🔴 {text}"); st.dataframe(diff.style.format("{:,.1f}"), width="stretch")
+        st.markdown(f"#### 🔴 {text[:120]}"); st.dataframe(diff.style.format("{:,.1f}"), width="stretch")
         ks = ["Margin %", "Delay Risk %", "Fleet Load %"]; st.plotly_chart(style(go.Figure([go.Bar(name="Before", x=ks, y=[before[x] for x in ks], marker_color=OK), go.Bar(name="After", x=ks, y=[after[x] for x in ks], marker_color=BAD)])), width="stretch")
         if cdrop: st.warning(assessment(ab))
-        l, r = st.columns(2); l.markdown("**Mitigation action plan**"); [l.markdown(f"{i}. {s}") for i, s in enumerate(plan(cp, cdrop), 1)]
-        r.markdown("**Audit log - assumptions**"); [r.markdown(f"- {s}") for s in notes + [f"Parameters applied: {cp}", "Raw data unchanged; scenario computed on a cleaned copy"]]
+        l, r = st.columns(2); l.markdown("**Mitigation action plan**"); [l.markdown(f"{i}. {s_}") for i, s_ in enumerate(plan(cp, cdrop), 1)]
+        r.markdown("**Audit log - assumptions**"); [r.markdown(f"- {s_}") for s_ in notes + ["Raw data unchanged; scenario computed on a cleaned copy"]]
+        st.session_state.history.append({"Card": text[:60], "Margin % after": round(after["Margin %"], 1), "Delay risk % after": round(after["Delay Risk %"]), "Levers": str(cp), "Feeds lost": ", ".join(cdrop) or "-"})
+    if st.session_state.history:
+        with st.expander(f"Constraint card history ({len(st.session_state.history)})"): st.dataframe(pd.DataFrame(st.session_state.history), width="stretch")
 
 with t7:
     st.subheader("How the numbers are calculated")
@@ -445,3 +484,12 @@ with t7:
 - **Policy conflicts**: highest tier wins - Executive > SOP > Provisional.
 - **Cleaning**: duplicates dropped, hub IDs standardised to BLR_HUB_NN, bad dates blanked, missing numbers → median, missing text → UNKNOWN, 'Delivered' without delivery date → 'In Transit'. Raw data is never modified.""")
     st.warning("**Limitations**: surrogate values (85% OTD, 6% returns, 70% utilisation, 80 supplier) are benchmarks, not facts; the simulator is a simplified linear model; column auto-detection can be corrected in the sidebar mapping; policy rule reading is keyword-based; figures are indicative (±15%) when feeds are missing.")
+
+with t8:
+    st.subheader("Auto Insights - works on any dataset"); st.caption("No column names needed: automatic checks for gaps, outliers, dominant categories and relationships.")
+    for x in insights(cleaned): st.markdown(x)
+    sh = st.selectbox("Sheet to chart", list(cleaned), key="ai_s"); d = cleaned[sh]; nm = [x for x in d.columns if pd.api.types.is_numeric_dtype(d[x])]
+    if nm:
+        col = st.selectbox("Distribution of", nm, key="ai_c"); st.plotly_chart(style(go.Figure(go.Histogram(x=d[col], marker_color=CYAN)).update_layout(title=f"Distribution of {col}")), width="stretch")
+    if len(nm) > 2:
+        cm = d[nm[:12]].corr(); st.plotly_chart(style(go.Figure(go.Heatmap(z=cm.values, x=cm.columns, y=cm.index, colorscale="Tealgrn", zmin=-1, zmax=1)).update_layout(title="Correlation map"), 420), width="stretch")
